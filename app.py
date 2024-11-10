@@ -1,175 +1,200 @@
 import streamlit as st
 import pandas as pd
-import requests
-import plotly.express as px
-from datetime import datetime, timedelta
-
-# Configurações da API
-LOCALIZA_CONFIG = {
-    'api_url': 'http://sistema.localizarastreamento.com/integracao/mestre/getVeiculos.php',
-    'token': 'WREPZVgbr6sih8jLgqgPwMo8RgrjhC59zKGObxLLSXb1H3UDaPw5OfHEMFVWoWqi',
-    'user': '50282072080',
-    'password': 'HKJ@iu&0#23i*o9iu60T'
-}
 
 
-def clean_localiza_data(data):
-    """Limpa e padroniza os dados da Localiza"""
-    for veiculo in data:
-        # Converte campos vazios para None
-        for key in veiculo:
-            if veiculo[key] == "":
-                veiculo[key] = None
-
-        # Converte campos numéricos
-        numeric_fields = ['odometro', 'horimetro',
-                          'velocidade', 'latitude', 'longitude']
-        for field in numeric_fields:
-            if veiculo[field]:
-                try:
-                    veiculo[field] = float(veiculo[field])
-                except (ValueError, TypeError):
-                    veiculo[field] = None
-
-        # Padroniza status de ignição
-        if veiculo['ignicao']:
-            veiculo['ignicao'] = 'ON' if veiculo['ignicao'] == '1' else 'OFF'
-    return data
-
-
-def fetch_localiza_data():
-    """Busca dados da API da Localiza"""
+def load_equipment_data(file):
+    """Carrega e processa dados da planilha de equipamentos CRTI"""
     try:
-        headers = {
-            'Accept': 'application/json',
-            'token': LOCALIZA_CONFIG['token'],
-            'user': LOCALIZA_CONFIG['user'],
-            'pass': LOCALIZA_CONFIG['password']
-        }
-        response = requests.get(
-            LOCALIZA_CONFIG['api_url'], headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        return clean_localiza_data(data)
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao buscar dados da Localiza: {str(e)}")
-        return None
-
-
-def check_vehicle_status(df_localiza):
-    """Verifica status dos veículos na Localiza"""
-    if df_localiza is None or df_localiza.empty:
+        df = pd.read_excel(file)
+        st.write("Número total de equipamentos CRTI:", len(df))
+        return df
+    except Exception as e:
+        st.error(f"Erro ao carregar planilha CRTI: {str(e)}")
         return pd.DataFrame()
 
-    status = []
-    for _, veiculo in df_localiza.iterrows():
-        status_item = {
-            'placa': veiculo['placa'],
-            'status': [],
-            'ignicao': veiculo['ignicao'],
-            'velocidade': veiculo['velocidade'],
-            'odometro': veiculo['odometro'],
-            'horimetro': veiculo['horimetro'],
-            'latitude': veiculo['latitude'],
-            'longitude': veiculo['longitude']
-        }
 
-        # Verifica dados ausentes
-        if pd.isna(veiculo['ignicao']) or pd.isna(veiculo['velocidade']):
-            status_item['status'].append('Sem Comunicação')
+def load_medicoes_data(file):
+    """Carrega e processa dados da planilha de medições"""
+    try:
+        # Lê a planilha pulando as primeiras linhas que são cabeçalho
+        df = pd.read_excel(file, skiprows=4)  # Pula as 4 primeiras linhas
 
-        # Verifica coordenadas
-        if pd.isna(veiculo['latitude']) or pd.isna(veiculo['longitude']):
-            status_item['status'].append('Sem Posição')
+        # Debug: mostra número de colunas
+        st.write("Número de colunas na planilha:", len(df.columns))
+        st.write("Colunas originais:", df.columns.tolist())
 
-        # Verifica velocidade com ignição
-        if veiculo['ignicao'] == 'OFF' and veiculo['velocidade'] > 0:
-            status_item['status'].append('Inconsistência Velocidade/Ignição')
+        # Cria lista de nomes de colunas com o tamanho exato do DataFrame
+        num_cols = len(df.columns)
+        colunas_base = [
+            'Placa', 'Chassi', 'Modelo', 'Cliente', 'Cidade', 'Status',
+            'Col7', 'Col8', 'Col9', 'Col10', 'Horimetro_Atual',
+            'Data_Anterior', 'Horimetro_Anterior', 'Data_Atual',
+            'Col15', 'Diferenca_Horimetro', 'Col17', 'Media_Diaria',
+            'Col19', 'Ultima_Atualizacao', 'Status_Atualizacao'
+        ]
 
-        # Se não houver problemas
-        if not status_item['status']:
-            status_item['status'] = ['Normal']
+        # Estende a lista de colunas se necessário
+        while len(colunas_base) < num_cols:
+            colunas_base.append(f'Col{len(colunas_base)+1}')
 
-        status_item['status'] = ', '.join(status_item['status'])
-        status.append(status_item)
+        # Usa apenas o número necessário de colunas
+        colunas = colunas_base[:num_cols]
 
-    return pd.DataFrame(status)
+        # Debug: mostra nomes das colunas que serão usadas
+        st.write("Nomes das colunas que serão aplicados:", colunas)
+
+        # Atribui os nomes das colunas
+        df.columns = colunas
+
+        # Remove linhas vazias
+        df = df.dropna(how='all')
+
+        # Remove a primeira linha que contém os nomes originais
+        df = df.iloc[1:].reset_index(drop=True)
+
+        # Seleciona apenas as colunas relevantes que existem no DataFrame
+        colunas_desejadas = [
+            'Placa', 'Chassi', 'Modelo', 'Cliente', 'Cidade',
+            'Horimetro_Atual', 'Data_Atual', 'Diferenca_Horimetro',
+            'Media_Diaria', 'Ultima_Atualizacao', 'Status_Atualizacao'
+        ]
+
+        # Filtra apenas as colunas que existem
+        colunas_existentes = [
+            col for col in colunas_desejadas if col in df.columns]
+        df_clean = df[colunas_existentes]
+
+        # Debug: mostra informações do DataFrame processado
+        st.write("Número total de medições:", len(df_clean))
+        st.write("Colunas após processamento:", df_clean.columns.tolist())
+        st.write("Primeiras linhas após processamento:", df_clean.head())
+
+        return df_clean
+
+    except Exception as e:
+        st.error(f"Erro ao carregar planilha de medições: {str(e)}")
+        st.write("Erro detalhado:", str(e))
+        return pd.DataFrame()
+
+
+def combine_data(df_crti, df_medicoes):
+    """Combina os dados das duas planilhas usando Placa e Chassi"""
+    try:
+        # Cria cópias dos DataFrames para não modificar os originais
+        df_crti = df_crti.copy()
+        df_medicoes = df_medicoes.copy()
+
+        # Padroniza os nomes das colunas para o merge
+        df_crti['placa'] = df_crti['Placa:'].astype(str).str.strip()
+        df_crti['chassi'] = df_crti['Chassis:'].astype(str).str.strip()
+
+        # Padroniza os dados da planilha de medições
+        df_medicoes['placa'] = df_medicoes['Placa'].astype(str).str.strip()
+        df_medicoes['chassi'] = df_medicoes['Chassi'].astype(str).str.strip()
+
+        # Realiza o merge usando placa e chassi
+        merged_df = pd.merge(
+            df_crti,
+            df_medicoes,
+            how='left',
+            left_on=['placa', 'chassi'],
+            right_on=['placa', 'chassi']
+        )
+
+        # Adiciona coluna de status de medição
+        merged_df['Status_Medicao'] = merged_df['Horimetro_Atual'].notna().map(
+            {True: 'COM MEDIÇÃO', False: 'SEM MEDIÇÃO'})
+
+        # Adiciona informações de medição
+        merged_df['Horimetro'] = merged_df['Horimetro_Atual']
+        merged_df['Ultima_Medicao'] = merged_df['Data_Atual']
+        merged_df['Media_Diaria'] = merged_df['Media_Diaria']
+
+        return merged_df
+
+    except Exception as e:
+        st.error(f"Erro ao combinar dados: {str(e)}")
+        st.write("Detalhes do erro:", str(e))
+        return pd.DataFrame()
 
 
 def main():
-    st.title("Sistema de Monitoramento de Rastreadores")
+    st.title("Sistema de Monitoramento de Equipamentos")
 
     # Sidebar para uploads
     with st.sidebar:
         st.header("Arquivos de Dados")
-        crti_file = st.file_uploader("Planilha CRTI (Excel)", type=['xlsx'])
-        status_file = st.file_uploader(
-            "Planilha de Status (Excel)", type=['xlsx'])
+        crti_file = st.file_uploader(
+            "Planilha de Equipamentos (CRTI)",
+            type=['xlsx'],
+            help="Carregue a planilha base do CRTI"
+        )
 
-        if st.button("Atualizar Dados da Localiza"):
-            with st.spinner("Buscando dados..."):
-                localiza_data = fetch_localiza_data()
-                if localiza_data:
-                    st.session_state['localiza_data'] = localiza_data
-                    st.success("Dados atualizados com sucesso!")
+        medicoes_file = st.file_uploader(
+            "Planilha de Medições",
+            type=['xlsx'],
+            help="Carregue a planilha de medições"
+        )
 
-    # Tabs principais
-    tab1, tab2 = st.tabs(["Status Rastreadores", "Comparação"])
+    # Processa e exibe dados se tiver as planilhas
+    if crti_file is not None:
+        df_crti = load_equipment_data(crti_file)
 
-    # Tab 1: Status dos Rastreadores
-    with tab1:
-        st.header("Status dos Rastreadores")
-        if 'localiza_data' in st.session_state:
-            df_localiza = pd.DataFrame(st.session_state['localiza_data'])
-            status_df = check_vehicle_status(df_localiza)
+        if medicoes_file is not None:
+            df_medicoes = load_medicoes_data(medicoes_file)
 
-            # Filtra problemas
-            problemas = status_df[status_df['status'] != 'Normal']
+            if not df_crti.empty and not df_medicoes.empty:
+                # Combina os dados
+                combined_df = combine_data(df_crti, df_medicoes)
 
-            # Métricas
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total de Veículos", len(status_df))
-            with col2:
-                st.metric("Com Problemas", len(problemas))
-            with col3:
-                st.metric("Operando Normal", len(status_df) - len(problemas))
+                if not combined_df.empty:
+                    # Adiciona filtros
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        cidade_filter = st.multiselect(
+                            "Filtrar por Localização/Filial",
+                            options=sorted(
+                                combined_df['Localização/Filial Atual*:'].unique())
+                        )
+                    with col2:
+                        cliente_filter = st.multiselect(
+                            "Filtrar por Proprietário/Locador",
+                            options=sorted(
+                                combined_df['Proprietário ou Locador*:'].unique())
+                        )
+                    with col3:
+                        medicao_filter = st.multiselect(
+                            "Filtrar por Status de Medição",
+                            options=['COM MEDIÇÃO', 'SEM MEDIÇÃO']
+                        )
 
-            if not problemas.empty:
-                st.error("Veículos com Problemas:")
-                st.dataframe(problemas, use_container_width=True)
+                    # Aplica os filtros
+                    filtered_df = combined_df.copy()
+                    if cidade_filter:
+                        filtered_df = filtered_df[filtered_df['Localização/Filial Atual*:'].isin(
+                            cidade_filter)]
+                    if cliente_filter:
+                        filtered_df = filtered_df[filtered_df['Proprietário ou Locador*:'].isin(
+                            cliente_filter)]
+                    if medicao_filter:
+                        filtered_df = filtered_df[filtered_df['Status_Medicao'].isin(
+                            medicao_filter)]
 
-                # Mapa dos veículos com problema
-                problemas_mapa = problemas[problemas['latitude'].notna()]
-                if not problemas_mapa.empty:
-                    st.map(problemas_mapa[['latitude', 'longitude']])
-            else:
-                st.success("Todos os rastreadores operando normalmente")
+                    # Exibe o DataFrame
+                    st.dataframe(filtered_df, use_container_width=True)
 
-    # Tab 2: Comparação
-    with tab2:
-        st.header("Comparação de Dados")
-        if 'localiza_data' in st.session_state:
-            df_localiza = pd.DataFrame(st.session_state['localiza_data'])
-
-            # Exibe dados da Localiza
-            st.subheader("Dados dos Rastreadores")
-            st.dataframe(df_localiza, use_container_width=True)
-
-            # Gráficos
-            if not df_localiza.empty:
-                col1, col2 = st.columns(2)
-                with col1:
-                    fig1 = px.pie(df_localiza,
-                                  names='ignicao',
-                                  title="Status de Ignição")
-                    st.plotly_chart(fig1)
-
-                with col2:
-                    fig2 = px.histogram(df_localiza,
-                                        x='velocidade',
-                                        title="Distribuição de Velocidades")
-                    st.plotly_chart(fig2)
+                    # Adiciona métricas
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        total_equipamentos = len(filtered_df)
+                        st.metric("Total de Equipamentos", total_equipamentos)
+                    with col2:
+                        total_clientes = filtered_df['Proprietário ou Locador*:'].nunique()
+                        st.metric("Total de Clientes", total_clientes)
+                    with col3:
+                        com_medicao = len(
+                            filtered_df[filtered_df['Status_Medicao'] == 'COM MEDIÇÃO'])
+                        st.metric("Equipamentos com Medição", com_medicao)
 
 
 if __name__ == "__main__":
