@@ -36,3 +36,71 @@ Planilha equipamentos CRTI
 33:"Placa:"
 34:"RENAVAM:"
 35:"OK"
+
+===============================================================
+
+Planilha de Medições:
+
+Placa
+Chassi
+Modelo
+Fornecedor do Veículo (sublocado)
+Cidade
+Cliente Contrato
+Horímetro Anterior
+Data Horímetro Anterior
+Horímetro
+Data do Horímetro
+KM Anterior
+Data KM Anterior
+KM
+Data do KM
+H/DIA
+Horímetro e KM aproximado
+KM/Dia
+H/Dia Norm
+KM/Dia Norm
+Última atualização
+Status
+
+===============================================================
+
+
+API Localiza exemplo:
+URL: http://sistema.localizarastreamento.com/integracao/mestre/getVeiculos.php
+token: WREPZVgbr6sih8jLgqgPwMo8RgrjhC59zKGObxLLSXb1H3UDaPw5OfHEMFVWoWqi
+user: 50282072080
+pass: HKJ@iu&0#23i*o9iu60T
+[
+	{
+		"placa": "ESC006",
+		"ignicao": "1",
+		"velocidade": "0",
+		"latitude": "-14.236876",
+		"longitude": "-49.428906",
+		"odometro": "040860586",
+		"horimetro": "8189"
+	},
+	{
+		"placa": "RKW8C90",
+		"ignicao": "",
+		"velocidade": "",
+		"latitude": "",
+		"longitude": "",
+		"odometro": "",
+		"horimetro": "4775"
+	},
+]
+
+===============================================================
+
+Resultado final esperado:
+
+Placa
+Chassi
+Modelo
+Cliente
+Cidade
+Status
+Funcionamento
+Manutenção
