@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
-from datetime import datetime
-from urllib.parse import quote
 
 # Configuração da página
 st.set_page_config(
@@ -12,7 +10,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Título da aplicação
 st.title("📊 Sistema de Controle de Equipamentos")
 
 # Upload do arquivo
@@ -23,120 +20,130 @@ arquivo_excel = st.file_uploader(
     help="Faça upload de um arquivo Excel contendo os dados dos equipamentos"
 )
 
-# Validar configuração da API
-
 
 def validar_config_api():
-    """Valida as configurações da API"""
+    """Valida as configurações da API nos secrets do Streamlit."""
+    required_configs = ['token', 'user', 'pass']
     try:
-        # Verificar se todas as configurações necessárias existem
-        required_configs = ['token', 'user', 'pass']
-        for config in required_configs:
-            if config not in st.secrets['api_localiza']:
-                st.error(
-                    f"Configuração '{config}' não encontrada nos secrets da API")
-                return False
-        return True
-    except Exception as e:
-        st.error(f"Erro ao validar configurações da API: {str(e)}")
+        api_secrets = st.secrets['api_localiza']
+    except KeyError:
+        st.error("As configurações da API não foram encontradas nos secrets.")
         return False
+
+    missing_configs = [
+        config for config in required_configs if config not in api_secrets]
+    if missing_configs:
+        st.error(
+            f"As seguintes configurações estão faltando nos secrets da API: {', '.join(missing_configs)}")
+        return False
+    return True
 
 
 @st.cache_data(ttl=300)  # Cache por 5 minutos
 def buscar_dados_api():
-    """Função para buscar dados da API da Localiza"""
+    """Busca dados da API da Localiza."""
+    base_url = 'http://sistema.localizarastreamento.com/integracao/mestre/getVeiculos.php'
+
+    headers = {
+        'Accept': 'application/json',
+        'token': st.secrets['api_localiza']['token'],
+        'user': st.secrets['api_localiza']['user'],
+        'pass': st.secrets['api_localiza']['pass']
+    }
+
     try:
-        # URL base direta
-        base_url = 'http://sistema.localizarastreamento.com/integracao/mestre/getVeiculos.php'
-
-        # Headers com os parâmetros de autenticação dos secrets
-        headers = {
-            'Accept': 'application/json',
-            'token': st.secrets['api_localiza']['token'],
-            'user': st.secrets['api_localiza']['user'],
-            'pass': st.secrets['api_localiza']['pass']
-        }
-
-        # Fazer a requisição com os parâmetros no header
         response = requests.get(
             base_url,
             headers=headers,
+            # Atenção: verify=False desabilita a verificação SSL. Use com cuidado.
             verify=False,
             timeout=30
         )
-
-        if response.status_code != 200:
-            st.error(f"Erro na API. Status Code: {response.status_code}")
-            return None
-
-        try:
-            dados = response.json()
-            return dados if isinstance(dados, list) and len(dados) > 0 else None
-
-        except json.JSONDecodeError as e:
-            st.error(f"Erro ao decodificar JSON: {str(e)}")
-            return None
-
+        response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        st.error(f"Erro na requisição: {str(e)}")
+        st.error(f"Erro na requisição da API: {e}")
+        return None
+
+    try:
+        dados = response.json()
+        if isinstance(dados, list) and dados:
+            return dados
+        else:
+            st.warning("A resposta da API não contém dados válidos.")
+            return None
+    except json.JSONDecodeError as e:
+        st.error(f"Erro ao decodificar a resposta JSON: {e}")
         return None
 
 
+def extrair_placa_do_apelido(apelido):
+    """
+    Extrai a placa de um Apelido.
+
+    O Apelido pode ser no formato 'BT0002 | RDT-0A85' ou apenas 'RDT-0A85'.
+    Retorna a placa sem hífens e caracteres especiais.
+    """
+    apelido = str(apelido).strip()
+    if '|' in apelido:
+        # Se tem pipe, pega o valor depois do pipe
+        placa = apelido.split('|')[1].strip().upper()
+    else:
+        placa = apelido.strip().upper()
+    # Remover hífens e caracteres especiais
+    placa = ''.join(c for c in placa if c.isalnum())
+    return placa
+
+
 def atualizar_dados_localizacao(df):
-    """Atualiza os dados de localização dos equipamentos"""
+    """Atualiza os dados de localização dos equipamentos usando os dados da API."""
     dados_api = buscar_dados_api()
+    if dados_api is None:
+        st.warning("Nenhum dado foi retornado da API.")
+        return df
 
-    if dados_api:
-        # Criar um dicionário para fácil acesso aos dados da API
-        # Removendo hífens das placas da API
-        dados_por_placa = {item['placa'].strip().upper().replace('-', ''): item
-                           for item in dados_api}
+    if 'Apelido' not in df.columns:
+        st.error("A coluna 'Apelido' não está presente na planilha.")
+        return df
 
-        # Garantir que as colunas da API existam
-        colunas_api = ['Status API Localiza', 'Horímetro API Localiza']
-        for coluna in colunas_api:
-            if coluna not in df.columns:
-                df[coluna] = None
+    # Criar um dicionário para fácil acesso aos dados da API
+    dados_por_placa = {
+        item['placa'].strip().upper().replace('-', ''): item for item in dados_api
+    }
 
-        # Atualizar dados usando o Apelido
-        for idx, row in df.iterrows():
-            try:
-                # Extrair a placa do Apelido
-                apelido = str(row['Apelido']).strip()
+    # Garantir que as colunas da API existam no dataframe
+    df['Status API Localiza'] = None
+    df['Horímetro API Localiza'] = None
 
-                # Tratar o formato do Apelido (BT0002 | RDT-0A85)
-                if '|' in apelido:
-                    # Se tem pipe, pega o valor depois do pipe
-                    placa_busca = apelido.split('|')[1].strip().upper()
+    status_list = []
+    horimetro_list = []
+
+    for idx, row in df.iterrows():
+        apelido = row['Apelido']
+        try:
+            placa_busca = extrair_placa_do_apelido(apelido)
+            dados = dados_por_placa.get(placa_busca)
+            if dados:
+                ignicao = dados.get('ignicao')
+                if ignicao == '1':
+                    status = 'Ligado'
+                elif ignicao == '0':
+                    status = 'Desligado'
                 else:
-                    # Se não tem pipe, usa o valor completo
-                    placa_busca = apelido.strip().upper()
+                    status = 'Verificar'
+                horimetro = dados.get('horimetro')
+            else:
+                status = 'Não Encontrado'
+                horimetro = None
+        except Exception as e:
+            st.warning(f"Erro ao processar Apelido '{apelido}': {e}")
+            status = 'Erro'
+            horimetro = None
 
-                # Remover hífen e caracteres especiais da placa
-                placa_busca = placa_busca.replace('-', '')
-                placa_busca = ''.join(c for c in placa_busca if c.isalnum())
+        status_list.append(status)
+        horimetro_list.append(horimetro)
 
-                # Buscar dados da placa
-                if placa_busca in dados_por_placa:
-                    dados = dados_por_placa[placa_busca]
-                    # Atualizar Status
-                    if dados['ignicao'] == '1':
-                        df.at[idx, 'Status API Localiza'] = 'Ligado'
-                    elif dados['ignicao'] == '0':
-                        df.at[idx, 'Status API Localiza'] = 'Desligado'
-                    else:
-                        df.at[idx, 'Status API Localiza'] = 'Verificar'
-
-                    # Atualizar Horímetro
-                    df.at[idx, 'Horímetro API Localiza'] = dados['horimetro']
-                else:
-                    df.at[idx, 'Status API Localiza'] = 'Não Encontrado'
-                    df.at[idx, 'Horímetro API Localiza'] = None
-
-            except Exception as e:
-                st.warning(f"Erro ao processar Apelido '{apelido}': {str(e)}")
-                df.at[idx, 'Status API Localiza'] = 'Erro'
-                df.at[idx, 'Horímetro API Localiza'] = None
+    df['Status API Localiza'] = status_list
+    df['Horímetro API Localiza'] = horimetro_list
 
     return df
 
@@ -155,131 +162,106 @@ if arquivo_excel is not None:
         # Leitura do arquivo Excel
         df = pd.read_excel(arquivo_excel, usecols=colunas_esperadas)
 
-        # Inicializar df_filtrado
-        df_filtrado = df.copy()
-
-        # Garantir que a coluna Status API Localiza existe
-        if 'Status API Localiza' not in df.columns:
-            df['Status API Localiza'] = None
-            df_filtrado['Status API Localiza'] = None
-
-        # Buscar dados da API automaticamente
-        if validar_config_api():
-            with st.spinner('Buscando dados da API...'):
-                df = atualizar_dados_localizacao(df)
-                df_filtrado = df.copy()
-            st.success('Dados da API carregados com sucesso!')
+        # Verificar colunas faltantes
+        colunas_faltantes = [
+            col for col in colunas_esperadas if col not in df.columns]
+        if colunas_faltantes:
+            st.error(
+                f"As seguintes colunas estão faltando na planilha: {', '.join(colunas_faltantes)}")
+            st.stop()
 
         # Verificar se a coluna Apelido está preenchida
         apelidos_vazios = df['Apelido'].isna().sum()
         if apelidos_vazios > 0:
             st.warning(
-                f"⚠️ Existem {apelidos_vazios} equipamentos sem Apelido definido. O Apelido é necessário para integração com a API da Localiza.")
-
-        # Verificar colunas faltantes
-        colunas_faltantes = [
-            col for col in colunas_esperadas if col not in df.columns]
-
-        if colunas_faltantes:
-            st.error(
-                f"As seguintes colunas estão faltando na planilha: {', '.join(colunas_faltantes)}")
-        else:
-            # Exibir estatísticas básicas
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total de Equipamentos", len(df))
-            with col2:
-                st.metric("Quantidade de Filiais", df['Filial'].nunique())
-            with col3:
-                st.metric("Tipos de Equipamentos", df['Tipo'].nunique())
-
-            # Adicionar filtros
-            st.subheader("Filtros")
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-                filial_filtro = st.multiselect(
-                    "Filial",
-                    options=sorted(df['Filial'].unique())
-                )
-
-            with col2:
-                tipo_filtro = st.multiselect(
-                    "Tipo de Equipamento",
-                    options=sorted(df['Tipo'].unique())
-                )
-
-            with col3:
-                situacao_filtro = st.multiselect(
-                    "Situação",
-                    options=sorted(df['Situação'].unique())
-                )
-
-            with col4:
-                # Pegar apenas os status que existem nos dados
-                status_existentes = df_filtrado['Status API Localiza'].dropna(
-                ).unique()
-                status_options = sorted(status_existentes) if len(
-                    status_existentes) > 0 else []
-
-                status_api_filtro = st.multiselect(
-                    "Status API Localiza",
-                    options=status_options
-                )
-
-            # Aplicar filtros
-            if filial_filtro:
-                df_filtrado = df_filtrado[df_filtrado['Filial'].isin(
-                    filial_filtro)]
-            if tipo_filtro:
-                df_filtrado = df_filtrado[df_filtrado['Tipo'].isin(
-                    tipo_filtro)]
-            if situacao_filtro:
-                df_filtrado = df_filtrado[df_filtrado['Situação'].isin(
-                    situacao_filtro)]
-            if status_api_filtro:
-                df_filtrado = df_filtrado[df_filtrado['Status API Localiza'].isin(
-                    status_api_filtro)]
-
-            # Definir ordem das colunas
-            colunas_ordenadas = [
-                'Apelido',
-                'Placa',
-                'Status API Localiza',
-                'Horímetro API Localiza',
-                'Filial',
-                'Série',
-                'Chassis',
-                'Horômetro',
-                'Marca',
-                'Modelo',
-                'Tipo',
-                'Situação',
-                'Valor Locação',
-                'Grupo Equipamento',
-                'Sub Grupo Equipamento'
-            ]
-
-            # Filtrar colunas existentes
-            colunas_existentes = [
-                col for col in colunas_ordenadas if col in df_filtrado.columns]
-
-            # Exibir o DataFrame
-            st.dataframe(
-                df_filtrado[colunas_existentes],
-                use_container_width=True,
-                hide_index=True
+                f"⚠️ Existem {apelidos_vazios} equipamentos sem Apelido definido. O Apelido é necessário para integração com a API da Localiza."
             )
 
-            # Botão de download
-            st.download_button(
-                label="📥 Download dos dados filtrados",
-                data=df_filtrado.to_csv(index=False).encode('utf-8'),
-                file_name="equipamentos_filtrados.csv",
-                mime="text/csv"
-            )
+        # Buscar dados da API
+        if validar_config_api():
+            with st.spinner('Buscando dados da API...'):
+                df = atualizar_dados_localizacao(df)
+            st.success('Dados da API carregados com sucesso!')
+
+        # Exibir estatísticas básicas
+        st.subheader("Estatísticas Básicas")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total de Equipamentos", len(df))
+        col2.metric("Quantidade de Filiais", df['Filial'].nunique())
+        col3.metric("Tipos de Equipamentos", df['Tipo'].nunique())
+
+        # Adicionar filtros
+        st.subheader("Filtros")
+        col1, col2, col3, col4 = st.columns(4)
+
+        filial_filtro = col1.multiselect(
+            "Filial",
+            options=sorted(df['Filial'].dropna().unique())
+        )
+
+        tipo_filtro = col2.multiselect(
+            "Tipo de Equipamento",
+            options=sorted(df['Tipo'].dropna().unique())
+        )
+
+        situacao_filtro = col3.multiselect(
+            "Situação",
+            options=sorted(df['Situação'].dropna().unique())
+        )
+
+        status_existentes = df['Status API Localiza'].dropna().unique()
+        status_options = sorted(status_existentes) if len(
+            status_existentes) > 0 else []
+
+        status_api_filtro = col4.multiselect(
+            "Status API Localiza",
+            options=status_options
+        )
+
+        # Aplicar filtros
+        df_filtrado = df.copy()
+        if filial_filtro:
+            df_filtrado = df_filtrado[df_filtrado['Filial'].isin(
+                filial_filtro)]
+        if tipo_filtro:
+            df_filtrado = df_filtrado[df_filtrado['Tipo'].isin(tipo_filtro)]
+        if situacao_filtro:
+            df_filtrado = df_filtrado[df_filtrado['Situação'].isin(
+                situacao_filtro)]
+        if status_api_filtro:
+            df_filtrado = df_filtrado[df_filtrado['Status API Localiza'].isin(
+                status_api_filtro)]
+
+        # Definir ordem das colunas
+        colunas_ordenadas = [
+            'Apelido', 'Placa', 'Status API Localiza', 'Horímetro API Localiza',
+            'Horômetro', 'Série', 'Chassis', 'Filial', 'Marca', 'Modelo',
+            'Tipo', 'Situação', 'Valor Locação', 'Grupo Equipamento',
+            'Sub Grupo Equipamento', 'Observações'
+        ]
+
+        # Filtrar colunas existentes
+        colunas_existentes = [
+            col for col in colunas_ordenadas if col in df_filtrado.columns]
+
+        # Exibir o DataFrame
+        st.subheader("Dados dos Equipamentos")
+        st.dataframe(
+            df_filtrado[colunas_existentes],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # Botão de download
+        csv = df_filtrado.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download dos dados filtrados",
+            data=csv,
+            file_name="equipamentos_filtrados.csv",
+            mime="text/csv"
+        )
 
     except Exception as e:
-        st.error(f"Erro ao processar o arquivo: {str(e)}")
+        st.error(f"Erro ao processar o arquivo: {e}")
 else:
     st.info("👆 Por favor, faça o upload de uma planilha para começar.")
