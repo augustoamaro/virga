@@ -92,9 +92,11 @@ def atualizar_dados_localizacao(df):
         dados_por_placa = {item['placa'].strip().upper().replace('-', ''): item
                            for item in dados_api}
 
-        # Garantir que a coluna Status API Localiza existe
-        if 'Status API Localiza' not in df.columns:
-            df['Status API Localiza'] = None
+        # Garantir que as colunas da API existam
+        colunas_api = ['Status API Localiza', 'Horímetro API Localiza']
+        for coluna in colunas_api:
+            if coluna not in df.columns:
+                df[coluna] = None
 
         # Atualizar dados usando o Apelido
         for idx, row in df.iterrows():
@@ -117,18 +119,24 @@ def atualizar_dados_localizacao(df):
                 # Buscar dados da placa
                 if placa_busca in dados_por_placa:
                     dados = dados_por_placa[placa_busca]
+                    # Atualizar Status
                     if dados['ignicao'] == '1':
                         df.at[idx, 'Status API Localiza'] = 'Ligado'
                     elif dados['ignicao'] == '0':
                         df.at[idx, 'Status API Localiza'] = 'Desligado'
                     else:
                         df.at[idx, 'Status API Localiza'] = 'Verificar'
+
+                    # Atualizar Horímetro
+                    df.at[idx, 'Horímetro API Localiza'] = dados['horimetro']
                 else:
                     df.at[idx, 'Status API Localiza'] = 'Não Encontrado'
+                    df.at[idx, 'Horímetro API Localiza'] = None
 
             except Exception as e:
                 st.warning(f"Erro ao processar Apelido '{apelido}': {str(e)}")
                 df.at[idx, 'Status API Localiza'] = 'Erro'
+                df.at[idx, 'Horímetro API Localiza'] = None
 
     return df
 
@@ -136,16 +144,31 @@ def atualizar_dados_localizacao(df):
 # Processamento do arquivo
 if arquivo_excel is not None:
     try:
-        # Lista de colunas esperadas (adicionando a coluna Apelido)
+        # Lista de colunas esperadas
         colunas_esperadas = [
             'Filial', 'Série', 'Chassis', 'Horômetro', 'Marca', 'Modelo',
             'Tipo', 'Placa', 'Situação', 'Valor Locação',
             'Grupo Equipamento', 'Sub Grupo Equipamento', 'Observações',
-            'Apelido'  # Nova coluna adicionada
+            'Apelido'
         ]
 
-        # Agora sim, leitura do arquivo Excel com as colunas específicas
+        # Leitura do arquivo Excel
         df = pd.read_excel(arquivo_excel, usecols=colunas_esperadas)
+
+        # Inicializar df_filtrado
+        df_filtrado = df.copy()
+
+        # Garantir que a coluna Status API Localiza existe
+        if 'Status API Localiza' not in df.columns:
+            df['Status API Localiza'] = None
+            df_filtrado['Status API Localiza'] = None
+
+        # Buscar dados da API automaticamente
+        if validar_config_api():
+            with st.spinner('Buscando dados da API...'):
+                df = atualizar_dados_localizacao(df)
+                df_filtrado = df.copy()
+            st.success('Dados da API carregados com sucesso!')
 
         # Verificar se a coluna Apelido está preenchida
         apelidos_vazios = df['Apelido'].isna().sum()
@@ -153,7 +176,7 @@ if arquivo_excel is not None:
             st.warning(
                 f"⚠️ Existem {apelidos_vazios} equipamentos sem Apelido definido. O Apelido é necessário para integração com a API da Localiza.")
 
-        # Verificar se todas as colunas necessárias estão presentes
+        # Verificar colunas faltantes
         colunas_faltantes = [
             col for col in colunas_esperadas if col not in df.columns]
 
@@ -193,14 +216,18 @@ if arquivo_excel is not None:
                 )
 
             with col4:
+                # Pegar apenas os status que existem nos dados
+                status_existentes = df_filtrado['Status API Localiza'].dropna(
+                ).unique()
+                status_options = sorted(status_existentes) if len(
+                    status_existentes) > 0 else []
+
                 status_api_filtro = st.multiselect(
                     "Status API Localiza",
-                    options=['Ligado', 'Desligado',
-                             'Não Encontrado', 'Verificar', 'Erro']
+                    options=status_options
                 )
 
             # Aplicar filtros
-            df_filtrado = df.copy()
             if filial_filtro:
                 df_filtrado = df_filtrado[df_filtrado['Filial'].isin(
                     filial_filtro)]
@@ -214,93 +241,37 @@ if arquivo_excel is not None:
                 df_filtrado = df_filtrado[df_filtrado['Status API Localiza'].isin(
                     status_api_filtro)]
 
-            # Após carregar o DataFrame, adicionar botão para atualizar dados da API
-            if st.button("🔄 Atualizar Dados da Localiza"):
-                if validar_config_api():
-                    with st.spinner('Buscando dados da API...'):
-                        # Atualizar o DataFrame original
-                        df = atualizar_dados_localizacao(df)
+            # Definir ordem das colunas
+            colunas_ordenadas = [
+                'Apelido',
+                'Placa',
+                'Status API Localiza',
+                'Horímetro API Localiza',
+                'Filial',
+                'Série',
+                'Chassis',
+                'Horômetro',
+                'Marca',
+                'Modelo',
+                'Tipo',
+                'Situação',
+                'Valor Locação',
+                'Grupo Equipamento',
+                'Sub Grupo Equipamento'
+            ]
 
-                        # Garantir que as colunas da API existam no DataFrame filtrado
-                        df_filtrado = df.copy()
+            # Filtrar colunas existentes
+            colunas_existentes = [
+                col for col in colunas_ordenadas if col in df_filtrado.columns]
 
-                        # Reaplicar os filtros
-                        if filial_filtro:
-                            df_filtrado = df_filtrado[df_filtrado['Filial'].isin(
-                                filial_filtro)]
-                        if tipo_filtro:
-                            df_filtrado = df_filtrado[df_filtrado['Tipo'].isin(
-                                tipo_filtro)]
-                        if situacao_filtro:
-                            df_filtrado = df_filtrado[df_filtrado['Situação'].isin(
-                                situacao_filtro)]
-                        if status_api_filtro:
-                            df_filtrado = df_filtrado[df_filtrado['Status API Localiza'].isin(
-                                status_api_filtro)]
+            # Exibir o DataFrame
+            st.dataframe(
+                df_filtrado[colunas_existentes],
+                use_container_width=True,
+                hide_index=True
+            )
 
-                    st.success('Dados atualizados com sucesso!')
-
-                    # Definir ordem específica das colunas
-                    colunas_ordenadas = [
-                        'Apelido',
-                        'Placa',
-                        'Status API Localiza',
-                        'Filial',
-                        'Série',
-                        'Chassis',
-                        'Horômetro',
-                        'Marca',
-                        'Modelo',
-                        'Tipo',
-                        'Situação',
-                        'Valor Locação',
-                        'Grupo Equipamento',
-                        'Sub Grupo Equipamento'
-                    ]
-
-                    # Filtrar apenas as colunas que existem no DataFrame
-                    colunas_existentes = [
-                        col for col in colunas_ordenadas if col in df_filtrado.columns]
-
-                    # Exibir o DataFrame com as colunas ordenadas
-                    st.dataframe(
-                        df_filtrado[colunas_existentes],
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-            else:
-                # Exibição normal quando não houver atualização
-                st.subheader("Lista de Equipamentos")
-
-                # Usar a mesma ordem de colunas para a exibição normal
-                colunas_ordenadas = [
-                    'Apelido',
-                    'Placa',
-                    'Filial',
-                    'Série',
-                    'Chassis',
-                    'Horômetro',
-                    'Marca',
-                    'Modelo',
-                    'Tipo',
-                    'Situação',
-                    'Valor Locação',
-                    'Grupo Equipamento',
-                    'Sub Grupo Equipamento'
-                ]
-
-                # Filtrar apenas as colunas que existem no DataFrame
-                colunas_existentes = [
-                    col for col in colunas_ordenadas if col in df_filtrado.columns]
-
-                st.dataframe(
-                    df_filtrado[colunas_existentes],
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-            # Adicionar botão para download dos dados filtrados
+            # Botão de download
             st.download_button(
                 label="📥 Download dos dados filtrados",
                 data=df_filtrado.to_csv(index=False).encode('utf-8'),
