@@ -88,50 +88,45 @@ def atualizar_dados_localizacao(df):
 
     if dados_api:
         # Criar um dicionário para fácil acesso aos dados da API
-        dados_por_placa = {item['placa']: item for item in dados_api}
+        dados_por_placa = {item['placa'].strip(
+        ).upper(): item for item in dados_api}
 
-        # Criar novas colunas se não existirem
-        novas_colunas = [
-            'Última Atualização', 'Ignição', 'Velocidade', 'Latitude',
-            'Longitude', 'Hodômetro API', 'Horímetro API',
-            'Status API Localiza', 'Placa API'
-        ]
-
-        for coluna in novas_colunas:
-            if coluna not in df.columns:
-                df[coluna] = ''
+        # Garantir que a coluna Status API Localiza existe
+        if 'Status API Localiza' not in df.columns:
+            df['Status API Localiza'] = None
 
         # Atualizar dados usando o Apelido
         for idx, row in df.iterrows():
             try:
+                # Extrair a placa do Apelido
                 apelido = str(row['Apelido']).strip()
-                placa_do_apelido = apelido.split(
-                    '|')[1].strip() if '|' in apelido else apelido
 
-                # Procurar pela placa que corresponde ao apelido
-                for placa, dados in dados_por_placa.items():
-                    if placa.strip().upper() == placa_do_apelido.upper():
-                        # Atualizar Status API Localiza baseado no valor de ignição
-                        if dados['ignicao'] == '1':
-                            df.loc[idx, 'Status API Localiza'] = 'Ligado'
-                        elif dados['ignicao'] == '0':
-                            df.loc[idx, 'Status API Localiza'] = 'Desligado'
-                        else:
-                            df.loc[idx, 'Status API Localiza'] = 'Verificar'
+                # Tratar o formato do Apelido (BT0002 | RDT-0A85)
+                if '|' in apelido:
+                    # Se tem pipe, pega o valor depois do pipe
+                    placa_busca = apelido.split('|')[1].strip().upper()
+                else:
+                    # Se não tem pipe, usa o valor completo
+                    placa_busca = apelido.strip().upper()
 
-                        # Atualizar outros campos
-                        df.loc[idx, 'Placa API'] = placa
-                        df.loc[idx, 'Ignição'] = 'Ligado' if dados['ignicao'] == '1' else 'Desligado'
-                        df.loc[idx, 'Velocidade'] = dados['velocidade']
-                        df.loc[idx, 'Latitude'] = dados['latitude']
-                        df.loc[idx, 'Longitude'] = dados['longitude']
-                        df.loc[idx, 'Hodômetro API'] = dados['odometro']
-                        df.loc[idx, 'Horímetro API'] = dados['horimetro']
-                        break
+                # Remover possíveis caracteres especiais da placa
+                placa_busca = ''.join(c for c in placa_busca if c.isalnum())
+
+                # Buscar dados da placa
+                if placa_busca in dados_por_placa:
+                    dados = dados_por_placa[placa_busca]
+                    if dados['ignicao'] == '1':
+                        df.at[idx, 'Status API Localiza'] = 'Ligado'
+                    elif dados['ignicao'] == '0':
+                        df.at[idx, 'Status API Localiza'] = 'Desligado'
+                    else:
+                        df.at[idx, 'Status API Localiza'] = 'Verificar'
+                else:
+                    df.at[idx, 'Status API Localiza'] = 'Não Encontrado'
 
             except Exception as e:
                 st.warning(f"Erro ao processar Apelido '{apelido}': {str(e)}")
-                df.loc[idx, 'Status API Localiza'] = 'Erro'
+                df.at[idx, 'Status API Localiza'] = 'Erro'
 
     return df
 
@@ -175,7 +170,7 @@ if arquivo_excel is not None:
 
             # Adicionar filtros
             st.subheader("Filtros")
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
                 filial_filtro = st.multiselect(
@@ -195,6 +190,13 @@ if arquivo_excel is not None:
                     options=sorted(df['Situação'].unique())
                 )
 
+            with col4:
+                status_api_filtro = st.multiselect(
+                    "Status API Localiza",
+                    options=['Ligado', 'Desligado',
+                             'Não Encontrado', 'Verificar', 'Erro']
+                )
+
             # Aplicar filtros
             df_filtrado = df.copy()
             if filial_filtro:
@@ -206,6 +208,9 @@ if arquivo_excel is not None:
             if situacao_filtro:
                 df_filtrado = df_filtrado[df_filtrado['Situação'].isin(
                     situacao_filtro)]
+            if status_api_filtro:
+                df_filtrado = df_filtrado[df_filtrado['Status API Localiza'].isin(
+                    status_api_filtro)]
 
             # Após carregar o DataFrame, adicionar botão para atualizar dados da API
             if st.button("🔄 Atualizar Dados da Localiza"):
@@ -227,6 +232,9 @@ if arquivo_excel is not None:
                         if situacao_filtro:
                             df_filtrado = df_filtrado[df_filtrado['Situação'].isin(
                                 situacao_filtro)]
+                        if status_api_filtro:
+                            df_filtrado = df_filtrado[df_filtrado['Status API Localiza'].isin(
+                                status_api_filtro)]
 
                     st.success('Dados atualizados com sucesso!')
 
@@ -235,12 +243,6 @@ if arquivo_excel is not None:
                         'Apelido',
                         'Placa',
                         'Status API Localiza',
-                        'Placa API',
-                        'Ignição',
-                        'Velocidade',
-                        'Horímetro API',
-                        'Latitude',
-                        'Longitude',
                         'Filial',
                         'Série',
                         'Chassis',
