@@ -23,23 +23,23 @@ arquivo_excel = st.file_uploader(
     help="Faça upload de um arquivo Excel contendo os dados dos equipamentos"
 )
 
-# Configurações da API Localiza
-API_CONFIG = {
-    'token': 'WREPZVgbr6sih8jLgqgPwMo8RgrjhC59zKGObxLLSXb1H3UDaPw5OfHEMFVWoWqi',
-    'user': '50282072080',
-    'pass': 'HKJ@iu&0#23i*o9iu60T'
-}
-
 # Validar configuração da API
 
 
 def validar_config_api():
     """Valida as configurações da API"""
-    for campo in ['token', 'user', 'pass']:
-        if not API_CONFIG.get(campo):
-            st.error(f"Campo {campo} não configurado na API")
-            return False
-    return True
+    try:
+        # Verificar se todas as configurações necessárias existem
+        required_configs = ['token', 'user', 'pass']
+        for config in required_configs:
+            if config not in st.secrets['api_localiza']:
+                st.error(
+                    f"Configuração '{config}' não encontrada nos secrets da API")
+                return False
+        return True
+    except Exception as e:
+        st.error(f"Erro ao validar configurações da API: {str(e)}")
+        return False
 
 
 @st.cache_data(ttl=300)  # Cache por 5 minutos
@@ -49,12 +49,12 @@ def buscar_dados_api():
         # URL base direta
         base_url = 'http://sistema.localizarastreamento.com/integracao/mestre/getVeiculos.php'
 
-        # Headers com os parâmetros de autenticação
+        # Headers com os parâmetros de autenticação dos secrets
         headers = {
             'Accept': 'application/json',
-            'token': API_CONFIG['token'],
-            'user': API_CONFIG['user'],
-            'pass': API_CONFIG['pass']
+            'token': st.secrets['api_localiza']['token'],
+            'user': st.secrets['api_localiza']['user'],
+            'pass': st.secrets['api_localiza']['pass']
         }
 
         # Fazer a requisição com os parâmetros no header
