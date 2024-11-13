@@ -88,8 +88,9 @@ def atualizar_dados_localizacao(df):
 
     if dados_api:
         # Criar um dicionário para fácil acesso aos dados da API
-        dados_por_placa = {item['placa'].strip(
-        ).upper(): item for item in dados_api}
+        # Removendo hífens das placas da API
+        dados_por_placa = {item['placa'].strip().upper().replace('-', ''): item
+                           for item in dados_api}
 
         # Garantir que a coluna Status API Localiza existe
         if 'Status API Localiza' not in df.columns:
@@ -109,7 +110,8 @@ def atualizar_dados_localizacao(df):
                     # Se não tem pipe, usa o valor completo
                     placa_busca = apelido.strip().upper()
 
-                # Remover possíveis caracteres especiais da placa
+                # Remover hífen e caracteres especiais da placa
+                placa_busca = placa_busca.replace('-', '')
                 placa_busca = ''.join(c for c in placa_busca if c.isalnum())
 
                 # Buscar dados da placa
